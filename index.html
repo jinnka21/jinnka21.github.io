@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="vi">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Bắn tim chuyển động liên tục</title>
+    <style>
+        /* Reset cơ bản */
+        
+        html,
+        body {
+            height: 100%;
+            margin: 0;
+            background: linear-gradient(180deg, #0f172a 0%, #07103a 100%);
+            /* nền đậm để tim nổi */
+            overflow: hidden;
+            font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+        }
+        /* Canvas luôn lấp đầy màn hình */
+        
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+        /* Controls nhỏ góc phải để chỉnh nhanh */
+        
+        .controls {
+            position: fixed;
+            right: 12px;
+            top: 12px;
+            background: rgba(255, 255, 255, 0.06);
+            color: #fff;
+            padding: 10px;
+            border-radius: 10px;
+            font-size: 13px;
+            backdrop-filter: blur(6px);
+            box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+        }
+        
+        .controls label {
+            display: block;
+            margin-bottom: 6px;
+        }
+        
+        .controls input[type="range"] {
+            width: 150px;
+        }
+        
+        .controls .small {
+            font-size: 11px;
+            opacity: 0.8;
+            margin-top: 6px;
+        }
+    </style>
+</head>
+
+<body>
+    <canvas id="stage"></canvas>
+
+    <div class="controls" aria-hidden="true">
+        <label>Spawn rate: <span id="rateVal">6</span> / s</label>
+        <input id="rate" type="range" min="1" max="30" value="6">
+        <label>Speed multiplier: <span id="speedVal">1.0</span>x</label>
+        <input id="speed" type="range" min="0.4" max="2.4" step="0.1" value="1.0">
+        <div class="small">Click anywhere to shoot a burst. Resize browser to test responsiveness.</div>
+    </div>
+
+    <script>
+        // Canvas setup
+        const canvas = document.getElementById('stage');
+        const ctx = canvas.getContext('2d', {
+            alpha: true
+        });
+
+        // Resize to devicePixelRatio for crispness
+        function resize() {
+            const dpr = window.devicePixelRatio || 1;
+            canvas.width = Math.round(window.innerWidth * dpr);
+            canvas.height = Math.round(window.innerHeight * dpr);
+            canvas.style.width = window.innerWidth + 'px';
+            canvas.style.height = window.innerHeight + 'px';
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // Utility helpers
+        function rand(min, max) {
+            return Math.random() * (max - min) + min;
+        }
+
+        function easeOutQuad(t) {
+            return 1 - (1 - t) * (1 - t);
+        }
+
+        // Particle (trái tim) class
+        class Heart {
+            constructor(x, y, vx, vy, size, hue) {
+                this.x = x;
+                this.y = y;
+                this.vx = vx;
+                this.vy = vy;
+                this.size = size; // base size in px
+                this.hue = hue; // color hue
+                this.life = 0; // 0 -> 1
+                this.ttl = rand(1.4, 2.6); // seconds to live
+                this.rotation = rand(-0.6, 0.6);
+                this.spin = rand(-1.2, 1.2);
+                this.alpha = 1;
+                this.scale = 1;
+            }
+
+            update(dt, speedMultiplier) {
+                // dt in seconds
+                this.life += dt / this.ttl;
+                // apply velocity with slight gravity upward (negative)
+                this.x += this.vx * dt * 60 * speedMultiplier;
+                this.y += this.vy * dt * 60 * speedMultiplier;
+                this.vx *= 0.995; // air resistance
+                // make them gently curve/float
+                this.vy -= 0.02 * dt * 60 * speedMultiplier;
+                this.rotation += this.spin * dt * 0.6;
+                // scale and alpha over life
+                const t = Math.min(this.life, 1);
+                this.scale = 1 + 0.3 * easeOutQuad(t);
+                this.alpha = Math.max(0, 1 - easeOutQuad(t));
+            }
+
+            draw(ctx) {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.rotation);
+                ctx.globalAlpha = this.alpha;
+                const s = this.size * this.scale;
+                drawHeartPath(ctx, 0, 0, s);
+                // fill with gradient
+                const g = ctx.createLinearGradient(-s, -s, s, s);
+                g.addColorStop(0, `hsl(${this.hue}, 90%, 65%)`);
+                g.addColorStop(0.6, `hsl(${(this.hue+12)%360}, 85%, 55%)`);
+                g.addColorStop(1, `hsl(${(this.hue+30)%360}, 80%, 45%)`);
+                ctx.fillStyle = g;
+                ctx.fill();
+                // soft highlight
+                ctx.globalAlpha = this.alpha * 0.18;
+                ctx.beginPath();
+                ctx.ellipse(-s * 0.2, -s * 0.4, s * 0.4, s * 0.25, -0.3, 0, Math.PI * 2);
+                ctx.fillStyle = '#fff';
+                ctx.fill();
+                ctx.restore();
+                ctx.globalAlpha = 1;
+            }
+
+            isDead() {
+                return this.life >= 1.0 || this.alpha <= 0.01;
+            }
+        }
+
+        // drawHeartPath draws a heart centered at (x,y) with given size
+        function drawHeartPath(ctx, x, y, size) {
+            // We use a parametric heart scaled to 'size'
+            // Draw using Bezier curves for smooth shape
+            const s = size / 30; // base scale (30 is tuned)
+            ctx.beginPath();
+            ctx.moveTo(x, y - 12 * s);
+            ctx.bezierCurveTo(x + 18 * s, y - 46 * s, x + 46 * s, y - 10 * s, x, y + 24 * s);
+            ctx.bezierCurveTo(x - 46 * s, y - 10 * s, x - 18 * s, y - 46 * s, x, y - 12 * s);
+            ctx.closePath();
+        }
+
+        // Particle system
+        let hearts = [];
+        let lastTime = performance.now();
+
+        // Controls
+        const rateSlider = document.getElementById('rate');
+        const rateVal = document.getElementById('rateVal');
+        const speedSlider = document.getElementById('speed');
+        const speedVal = document.getElementById('speedVal');
+
+        rateVal.textContent = rateSlider.value;
+        speedVal.textContent = parseFloat(speedSlider.value).toFixed(1);
+
+        rateSlider.addEventListener('input', () => rateVal.textContent = rateSlider.value);
+        speedSlider.addEventListener('input', () => speedVal.textContent = parseFloat(speedSlider.value).toFixed(1));
+
+        // Spawning logic
+        let spawnAccumulator = 0; // hearts to spawn based on rate and time
+        function spawnHeartBurst(x, y, count = 8) {
+            for (let i = 0; i < count; i++) {
+                const angle = rand(-Math.PI * 0.75, -Math.PI * 0.25); // mostly upward
+                const speed = rand(2.2, 6.2);
+                const vx = Math.cos(angle) * speed;
+                const vy = Math.sin(angle) * speed;
+                const size = rand(10, 30);
+                const hue = Math.round(rand(320, 10 + 360) % 360); // pinkish->redish range
+                hearts.push(new Heart(x, y, vx, vy, size, hue));
+            }
+        }
+
+        // Continuous automatic spawn from bottom center
+        function spawnAuto() {
+            const spawnPerSec = parseFloat(rateSlider.value); // hearts per second
+            const now = performance.now();
+            // handled in main loop with accumulator
+        }
+
+        // Click to create burst
+        window.addEventListener('click', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            spawnHeartBurst(x, y, Math.floor(rand(6, 14)));
+        });
+
+        // Also shoot from bottom center periodically like "bắn tim"
+        function mainLoop(now) {
+            const dt = Math.min(0.05, (now - lastTime) / 1000); // cap dt for stability
+            lastTime = now;
+
+            // spawn accumulator
+            const rate = parseFloat(rateSlider.value); // per second
+            spawnAccumulator += rate * dt;
+            // spawn from bottom center
+            const bottomX = window.innerWidth / 2;
+            const bottomY = window.innerHeight - 18;
+            while (spawnAccumulator >= 1) {
+                // spawn single heart with slight horizontal offset
+                const x = bottomX + rand(-120, 120);
+                const y = bottomY + rand(-6, 6);
+                const angle = rand(-Math.PI * 0.9, -Math.PI * 0.1);
+                const speed = rand(3.8, 7.2);
+                const vx = Math.cos(angle) * speed;
+                const vy = Math.sin(angle) * speed;
+                const size = rand(12, 26);
+                const hue = Math.round(rand(320, 360)) || Math.round(rand(330, 20));
+                hearts.push(new Heart(x, y, vx, vy, size, hue));
+                spawnAccumulator -= 1;
+            }
+
+            // update
+            const speedMultiplier = parseFloat(speedSlider.value);
+            for (let i = hearts.length - 1; i >= 0; i--) {
+                const h = hearts[i];
+                h.update(dt, speedMultiplier);
+                if (h.isDead()) hearts.splice(i, 1);
+            }
+
+            // draw
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            // optional subtle glow background
+            // draw hearts back-to-front for nicer overlap
+            for (let i = 0; i < hearts.length; i++) {
+                hearts[i].draw(ctx);
+            }
+
+            requestAnimationFrame(mainLoop);
+        }
+
+        // start
+        lastTime = performance.now();
+        requestAnimationFrame(mainLoop);
+
+        // small helper: spawn small burst every few seconds at center to keep things lively
+        setInterval(() => {
+            const W = window.innerWidth,
+                H = window.innerHeight;
+            if (Math.random() < 0.7) {
+                spawnHeartBurst(rand(W * 0.2, W * 0.8), rand(H * 0.2, H * 0.6), Math.floor(rand(4, 10)));
+            }
+        }, 1600);
+
+        // Keyboard shortcuts for fun
+        window.addEventListener('keydown', (e) => {
+            if (e.key === ' ') {
+                // big burst center
+                spawnHeartBurst(window.innerWidth / 2, window.innerHeight / 2, 30);
+            }
+            if (e.key === 'c') {
+                // clear
+                hearts = [];
+            }
+        });
+
+        // For accessibility: update values if someone changes them programmatically
+        // (keeps labels in sync)
+        const observer = new MutationObserver(() => {
+            rateVal.textContent = rateSlider.value;
+            speedVal.textContent = parseFloat(speedSlider.value).toFixed(1);
+        });
+        observer.observe(rateSlider, {
+            attributes: true,
+            attributeFilter: ['value']
+        });
+    </script>
+</body>
+
+</html>
